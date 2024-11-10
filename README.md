@@ -1,5 +1,7 @@
 # Nestjs 和 Prisma 实现 Restful Api
 
+## 第一章
+
 ### 技术：Nestjs、Prisma、PostgresSQL、Swagger、TypeScript
 
 ### 前提条件
@@ -132,14 +134,14 @@ model Article {
 }
 ```
 
-模型定义了一个名为 Article 的表，包含以下字段：
-• id: 主键，自动递增的整型。
-• title: 唯一的字符串字段，用于存储文章标题。
-• description: 可选的字符串字段，用于存储文章描述。
-• body: 字符串字段，存储文章的主体内容。
-• published: 布尔值，默认值为 false，指示文章是否已发布。
-• createdAt: 日期时间字段，默认值为当前时间，指示创建时间。
-• updatedAt: 日期时间字段，自动更新为当前时间，指示最后更新时间。
+模型定义了一个名为 Article 的表，包含以下字段： 
+* id: 主键，自动递增的整型。
+* title: 唯一的字符串字段，用于存储文章标题。
+* description: 可选的字符串字段，用于存储文章描述。
+* body: 字符串字段，存储文章的主体内容。
+* published: 布尔值，默认值为 false，指示文章是否已发布。
+* createdAt: 日期时间字段，默认值为当前时间，指示创建时间。
+* updatedAt: 日期时间字段，自动更新为当前时间，指示最后更新时间。
 
 数据库映射:
 
@@ -681,3 +683,93 @@ export class ArticlesController {
 * isArray: true：用于 findAll() 和 findDrafts() 方法，表明返回的是 ArticleEntity 数组。
 
 总结：我们实现了 Nestjs 搭配 prisma 操作数据库 CRUD 的 restful 接口，并且提供了 Swagger 接口文档。
+
+## 第二章
+
+### 参数验证与转换
+
+为了执行输入验证，您将使用NestJS Pipes。管道对路由处理程序正在处理的参数进行操作。Nest在路由处理程序之前调用一个管道，该管道接收用于路由处理程序的参数。管道可以做很多事情，比如验证输入、向输入添加字段等等。管道类似于中间件，但管道的作用域仅限于处理输入参数。NestJS提供了一些开箱即用的管道，但是您也可以创建自己的管道
+
+管道有两个典型的用例：
+* 验证：评估输入的数据，如果有效，则不加修改地传递；否则，当数据不正确时抛出异常。
+* 转换：将输入数据转换为所需的形式（例如，从字符串转换为整数）。
+
+### 全局设置ValidationPipe
+
+在 NestJS 中，可以使用内置的 ValidationPipe 来进行输入验证。ValidationPipe 提供了一种便捷的方法，能够强制对所有来自客户端的请求数据进行验证。验证规则通过 class-validator 包的装饰器来声明，装饰器用于定义 DTO 类中的验证规则，以确保传入的数据符合预期的格式和类型。
+首先我们需要安装2个库
+
+```shell
+pnpm install class-validator class-transformer
+```
+
+在 **main.ts** 引入 **ValidationPipe**，然后使用 **app.useGlobalPipes**
+
+```ts
+// src/main.ts
+import { NestFactory } from '@nestjs/core';
+import { AppModule } from './app.module';
+import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+import { ValidationPipe } from '@nestjs/common';
+
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+
+  app.useGlobalPipes(new ValidationPipe());
+
+  const config = new DocumentBuilder()
+    .setTitle('Median')
+    .setDescription('The Median API description')
+    .setVersion('0.1')
+    .build();
+  const document = SwaggerModule.createDocument(app, config);
+  SwaggerModule.setup('api', app, document);
+
+  await app.listen(3000);
+}
+bootstrap();
+```
+
+### 向CreateArticleDto添加验证规则
+
+使用 **class-validator** 库给 **CreateArticleDto** 添加验证装饰器。
+
+打开 **src/articles/dto/create-article.dto.ts** 文件，替换成以下内容：
+```ts
+// src/articles/dto/create-article.dto.ts
+
+import { ApiProperty } from '@nestjs/swagger';
+import {
+  IsBoolean,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  MaxLength,
+  MinLength,
+} from 'class-validator';
+
+export class CreateArticleDto {
+  @IsString()
+  @IsNotEmpty()
+  @MinLength(5)
+  @ApiProperty()
+  title: string;
+
+  @IsString()
+  @IsOptional()
+  @IsNotEmpty()
+  @MaxLength(300)
+  @ApiProperty({ required: false })
+  description?: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @ApiProperty()
+  body: string;
+
+  @IsBoolean()
+  @IsOptional()
+  @ApiProperty({ required: false, default: false })
+  published?: boolean = false;
+}
+```
