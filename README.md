@@ -756,8 +756,8 @@ export class CreateArticleDto {
   title: string;
 
   @IsString()
-  @IsOptional()
-  @IsNotEmpty()
+  @IsOptional() // 字段可以不存在
+  @IsNotEmpty() // 如果存在不能为空
   @MaxLength(300)
   @ApiProperty({ required: false })
   description?: string;
@@ -773,3 +773,140 @@ export class CreateArticleDto {
   published?: boolean = false;
 }
 ```
+
+articles.service 中 create 方法接受的参数就是 CreateArticleDto 类型，我们来新增一篇文章来测试一下。
+
+```json
+{
+  "title": "Temp",
+  "description": "Learn about input validation",
+  "body": "Input validation is...",
+  "published": false
+}
+```
+
+接口返回的内容如下：
+```json
+{
+  "message": [
+    "title must be longer than or equal to 5 characters"
+  ],
+  "error": "Bad Request",
+  "statusCode": 400
+}
+```
+
+这说明添加的验证规则生效了。客户端发起了一个 post 请求，ValidationPipe 验证参数未通过直接就返回给前端了，并没有到后续的路由。
+
+### 从客户端请求中删除不必要的属性
+
+如果我们在新建文章的时候加入 CreateArticleDto 中未定义的其他的属性，也是能新增成功的。但这很有可能会造成错误，比如新增下面这样的数据
+
+```json
+{
+  "title": "example-title",
+  "description": "example-description",
+  "body": "example-body",
+  "published": true,
+  "createdAt": "2010-06-08T18:20:29.309Z",
+  "updatedAt": "2021-06-02T18:20:29.310Z"
+}
+```
+
+通常来说，新增文件的 createdAt 是 ORM 自动生成的当前时间，updateAt 也是自动生成的。当我们传递的额外参数通过了校验，这是非常危险的，所幸 Nestjs 为我们提供了白名单的机制，只需要在初始化 **ValidationPipe** 的时候加上 ** whitelist:true ** 就可以了
+```ts
+// src/main.ts
+
+import { NestFactory } from '@nestjs/core';
+import { AppModule } from './app.module';
+import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+import { ValidationPipe } from '@nestjs/common';
+
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+
+  // 新增 whitelist: true
+  app.useGlobalPipes(new ValidationPipe({ whitelist: true }));
+
+  const config = new DocumentBuilder()
+    .setTitle('Median')
+    .setDescription('The Median API description')
+    .setVersion('0.1')
+    .build();
+  const document = SwaggerModule.createDocument(app, config);
+  SwaggerModule.setup('api', app, document);
+
+  await app.listen(3000);
+}
+bootstrap();
+```
+
+现在 ValidationPipe 将自动删除所有非白名单属性，也就是没有添加验证装饰器的额外参数都会被删除。
+
+### 使用 ParseIntPipe 转换动态URL路径参数
+
+目前我们的 api 接口中有很多利用到了路径参数，例如 GET /articels/:id, 路径参数获取到是 string 类型，我们需要转为 number 类型，通过 id 查询数据库。
+
+```ts
+// src/articles/articles.controller.ts
+
+@Delete(':id')
+@ApiOkResponse({ type: ArticleEntity })
+remove(@Param('id') id: string) {   // id 被解析成 string 类型
+  return this.articlesService.remove(+id); // +id 将id转为 number 类型 
+}
+```
+
+由于id被定义为字符串类型，因此Swagger API在生成的API文档中也将此参数作为字符串记录。这是不直观和不正确的。
+
+使用 Nestjs 内置的 **ParseIntPipe** 管道可以在路由处理之前，拦截字符串参数并转化为整数，并且修正 Swagger 文档的参数类型。
+
+修改我们的控制器代码
+
+```ts
+// src/articles/articles.controller.ts
+
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
+  Param,
+  Delete,
+  NotFoundException,
+  ParseIntPipe,
+} from '@nestjs/common';
+
+export class ArticlesController {
+  // ...
+
+  @Get(':id')
+  @ApiOkResponse({ type: ArticleEntity })
+  findOne(@Param('id', ParseIntPipe) id: number) {
+    return this.articlesService.findOne(id);
+  }
+
+  @Patch(':id')
+  @ApiCreatedResponse({ type: ArticleEntity })
+  update(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() updateArticleDto: UpdateArticleDto,
+  ) {
+    return this.articlesService.update(id, updateArticleDto);
+  }
+
+  @Delete(':id')
+  @ApiOkResponse({ type: ArticleEntity })
+  remove(@Param('id', ParseIntPipe) id: number) {
+    return this.articlesService.remove(id);
+  }
+}
+```
+
+刷新 Swagger 接口文档，id 参数修改成了 number 类型。
+
+通过文章的学习，我们完成了以下功能：
+* 集成 **ValidationPipe** 来验证参数类型
+* 去除不必要的额外参数
+* 使用 **ParseIntPipe** 将 string 转化成 number 类型
