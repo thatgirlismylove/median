@@ -21,6 +21,20 @@ model Article {
   published   Boolean  @default(false)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+  author      User?    @relation(fields: [authorId], references: [id])
+  authorId    Int?
 
   @@map("article")
+}
+
+model User {
+  id       Int       @id @default(autoincrement())
+  name     String?
+  email    String    @unique
+  password String
+  createAt DateTime  @default(now())
+  updateAt DateTime  @updatedAt
+  articles Article[]
+
+  @@map("user")
 }

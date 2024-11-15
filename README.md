@@ -910,3 +910,215 @@ export class ArticlesController {
 * 集成 **ValidationPipe** 来验证参数类型
 * 去除不必要的额外参数
 * 使用 **ParseIntPipe** 将 string 转化成 number 类型
+
+## 第三章
+
+### 给数据库添加 User 模型
+
+用户与文章是一对多的关系，我们可以自己填写完整的依赖关系，也可以利用 prisma 插件帮助我们生成，更新 prisma/schema.prisma 文件, 新增以下内容
+```prisma
+model User {
+  id       Int       @id @default(autoincrement())
+  name     String?
+  email    String    @unique
+  password String
+  createAt DateTime  @default(now())
+  updateAt DateTime  @updatedAt
+  articles Article[]
+
+  @@map("user")
+}
+```
+
+保存文件之后，prisma 插件会自动帮我生成 Article model 内对应的字段，内容如下
+
+```prisma
+model Article {
+  id          Int      @id @default(autoincrement())
+  title       String   @unique
+  description String?
+  body        String
+  published   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  User        User?    @relation(fields: [userId], references: [id])
+  userId      Int?
+
+  @@map("article")
+}
+```
+
+可以看到 Article model 新增了 User和userId 字段， 它们是可选的，也就是说我们可以创建没有作者的文章。我们可以修改一下字段的名称，最终结果如下：
+```prisma
+// prisma/schema.prisma
+
+// ...
+
+model Article {
+  id          Int      @id @default(autoincrement())
+  title       String   @unique
+  description String?
+  body        String
+  published   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  author      User?    @relation(fields: [authorId], references: [id])
+  authorId    Int?
+}
+
+model User {
+  id        Int       @id @default(autoincrement())
+  name      String?
+  email     String    @unique
+  password  String
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  articles  Article[]
+}
+```
+
+要将更改应用到数据库，可以运行 prisma migrate dev
+```shell
+npx prisma migrate dev --name "add-user-model"
+```
+
+访问本地 http://localhost:8080/ 通过 Adminer 查看 user 表已经添加成功
+
+### 更新 seed 脚本文件
+
+seed 脚本负责用虚拟数据填充数据库，更新脚本以在数据库中创建几个用户。
+
+```ts
+// 初始化 Prisma Client
+import { PrismaClient } from '@prisma/client';
+
+const prisma = new PrismaClient();
+
+async function main() {
+  const user1 = await prisma.user.upsert({
+    where: { email: 'sabin@adams.com' },
+    update: {},
+    create: {
+      email: 'sabin@adams.com',
+      name: 'Sabin Adams',
+      password: 'password-sabin',
+    },
+  });
+  console.log(user1);
+
+  const user2 = await prisma.user.upsert({
+    where: { email: 'alex@ruheni.com' },
+    update: {},
+    create: {
+      email: 'alex@ruheni.com',
+      name: 'Alex Ruheni',
+      password: 'password-alex',
+    },
+  });
+  console.log(user2);
+
+  // 创建2个虚拟文章
+  const post1 = await prisma.article.upsert({
+    where: { title: 'Prisma Adds Support for MongoDB' },
+    update: {
+      authorId: user1.id,
+    },
+    create: {
+      title: 'Prisma Adds Support for MongoDB',
+      body: 'Support for MongoDB has been one of the most requested features since the initial release of...',
+      description:
+        "We are excited to share that today's Prisma ORM release adds stable support for MongoDB!",
+      published: false,
+      authorId: user1.id,
+    },
+  });
+  console.log(post1);
+
+  // upsert：用于创建或更新，确保在满足 where 条件时更新，否则创建新记录。
+  const post2 = await prisma.article.upsert({
+    where: { title: "What's new in Prisma? (Q1/22)" },
+    update: {
+      authorId: user2.id,
+    },
+    create: {
+      title: "What's new in Prisma? (Q1/22)",
+      body: 'Our engineers have been working hard, issuing new releases with many improvements...',
+      description:
+        'Learn about everything in the Prisma ecosystem and community from January to March 2022.',
+      published: true,
+      authorId: user2.id,
+    },
+  });
+  console.log(post2);
+
+  const post3 = await prisma.article.upsert({
+    where: { title: 'Prisma Client Just Became a Lot More Flexible' },
+    update: {},
+    create: {
+      title: 'Prisma Client Just Became a Lot More Flexible',
+      body: 'Prisma Client extensions provide a powerful new way to add functionality to Prisma in a type-safe manner...',
+      description:
+        'This article will explore various ways you can use Prisma Client extensions to add custom functionality to Prisma Client..',
+      published: true,
+    },
+  });
+  console.log(post3);
+}
+
+// 执行 main 函数
+main()
+  .catch((e) => {
+    console.log(e);
+    // 非正常退出进程，不会执行后续任何代码
+    process.exit(1);
+  })
+  .finally(async () => {
+    // 关闭 Prisma Client
+    await prisma.$disconnect();
+  });
+
+```
+
+执行 seed 脚本，生成数据
+```shell
+npx prisma db seed
+```
+
+### 向ArticleEntity添加一个authorId字段
+
+运行迁移后，运行项目，你可能会注意到一个新的TypeScript错误。ArticleEntity类实现了Prisma生成的Article类型。Article类型有一个新的authorId字段，但是ArticleEntity类没有定义这个字段。TypeScript识别出了这种类型的不匹配，并抛出了一个错误。您可以通过将authorId字段添加到ArticleEntity类来修复此错误
+
+```ts
+// src/articles/entities/article.entity.ts
+
+import { Article } from '@prisma/client';
+import { ApiProperty } from '@nestjs/swagger';
+
+export class ArticleEntity implements Article {
+  @ApiProperty()
+  id: number;
+
+  @ApiProperty()
+  title: string;
+
+  @ApiProperty({ required: false, nullable: true })
+  description: string | null;
+
+  @ApiProperty()
+  body: string;
+
+  @ApiProperty()
+  published: boolean;
+
+  @ApiProperty()
+  createdAt: Date;
+
+  @ApiProperty()
+  updatedAt: Date;
+
+  @ApiProperty({ required: false, nullable: true })
+  authorId: number | null;
+}
+```
+
+### 实现 User 模块的 CRUD
