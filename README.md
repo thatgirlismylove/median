@@ -1122,3 +1122,513 @@ export class ArticleEntity implements Article {
 ```
 
 ### 实现 User 模块的 CRUD
+
+在本节中，我们将实现 User 模块的 rest api，可以对数据库进行 crud。
+
+#### 生成 user 模块的 rest 资源文件
+
+使用下面的命令自动生成文件：
+
+```shell
+npx nest generate resource
+```
+
+跟随 cli 提示，选择对应的功能，
+
+1. What name would you like to use for this resource (plural, e.g., "users")? users
+2. What transport layer do you use? REST API
+3. Would you like to generate CRUD entry points? Yes
+
+现在你应该看到 src/users 文件夹了，生成了对应的资源文件。
+
+#### 将 PrismaClient 添加到 User 模块
+
+```ts
+// src/users/users.module.ts
+import { Module } from '@nestjs/common';
+import { UsersService } from './users.service';
+import { UsersController } from './users.controller';
+import { PrismaModule } from 'src/prisma/prisma.module';
+
+@Module({
+  controllers: [UsersController],
+  providers: [UsersService],
+  imports: [PrismaModule],
+})
+export class UsersModule {}
+```
+
+现在你可以在UsersService中注入PrismaService，并使用它来访问数据库。
+
+```ts
+// src/users/users.service.ts
+
+import { Injectable } from '@nestjs/common';
+import { CreateUserDto } from './dto/create-user.dto';
+import { UpdateUserDto } from './dto/update-user.dto';
+import { PrismaService } from 'src/prisma/prisma.service';
+
+@Injectable()
+export class UsersService {
+  constructor(private prisma: PrismaService) {}
+
+// CRUD operations
+}
+```
+
+#### 定义 User 模块的 entity 和 DTO class
+
+```ts
+// src/users/entities/user.entity.ts
+import { ApiProperty } from '@nestjs/swagger';
+import { User } from '@prisma/client';
+
+export class UserEntity implements User {
+  @ApiProperty()
+  id: number;
+
+  @ApiProperty()
+  createdAt: Date;
+
+  @ApiProperty()
+  updatedAt: Date;
+
+  @ApiProperty()
+  name: string;
+
+  @ApiProperty()
+  email: string;
+
+  password: string;
+}
+```
+
+@ApiProperty装饰器用于使属性对Swagger可见。注意，您没有将@ApiProperty装饰器添加到密码字段。这是因为该字段很敏感，您不希望在API中公开它。
+
+DTO（数据传输对象）是一个定义如何通过网络发送数据的对象。您将需要实现CreateUserDto和UpdateUserDto类，分别定义在创建和更新用户时将发送给API的数据。在create-user.dto中定义CreateUserDto类。
+```ts
+// src/users/dto/create-user.dto.ts
+
+import { ApiProperty } from '@nestjs/swagger';
+import { IsNotEmpty, IsString, MinLength } from 'class-validator';
+
+export class CreateUserDto {
+  @IsString()
+  @IsNotEmpty()
+  @ApiProperty()
+  name: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @ApiProperty()
+  email: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MinLength(6)
+  @ApiProperty()
+  password: string;
+}
+```
+
+#### 定义 UserService class
+
+完善 UserService class 内部 create(), findAll(), findOne(), update() and remove() 的方法。
+
+```ts
+// src/users/users.service.ts
+
+import { Injectable } from '@nestjs/common';
+import { CreateUserDto } from './dto/create-user.dto';
+import { UpdateUserDto } from './dto/update-user.dto';
+import { PrismaService } from 'src/prisma/prisma.service';
+
+@Injectable()
+export class UsersService {
+  constructor(private prisma: PrismaService) {}
+
+  create(createUserDto: CreateUserDto) {
+    return this.prisma.user.create({ data: createUserDto });
+  }
+
+  findAll() {
+    return this.prisma.user.findMany();
+  }
+
+  findOne(id: number) {
+   return this.prisma.user.findUnique({ where: { id } });
+  }
+
+  update(id: number, updateUserDto: UpdateUserDto) {
+    return this.prisma.user.update({ where: { id }, data: updateUserDto });
+  }
+
+  remove(id: number) {
+    return this.prisma.user.delete({ where: { id } });
+  }
+}
+```
+
+#### 定义 UserController class
+
+UsersController负责处理客户端的请求和响应。它将利用UsersService来访问数据库，利用UserEntity来定义响应体，利用CreateUserDto和UpdateUserDto来定义请求体。
+
+下面我们来完善下面5个接口：
+* create() - POST /users
+* findAll() - GET /users
+* findOne() - GET /users/:id
+* update() - PATCH /users/:id
+* remove() - DELETE /users/:id
+
+```ts
+// src/users/users.controller.ts
+
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
+  Param,
+  Delete,
+  ParseIntPipe,
+} from '@nestjs/common';
+import { UsersService } from './users.service';
+import { CreateUserDto } from './dto/create-user.dto';
+import { UpdateUserDto } from './dto/update-user.dto';
+import { ApiCreatedResponse, ApiOkResponse, ApiTags } from '@nestjs/swagger';
+import { UserEntity } from './entities/user.entity';
+
+@Controller('users')
+@ApiTags('users')
+export class UsersController {
+  constructor(private readonly usersService: UsersService) {}
+
+  @Post()
+  @ApiCreatedResponse({ type: UserEntity })
+  create(@Body() createUserDto: CreateUserDto) {
+    return this.usersService.create(createUserDto);
+  }
+
+  @Get()
+  @ApiOkResponse({ type: UserEntity, isArray: true })
+  findAll() {
+    return this.usersService.findAll();
+  }
+
+  @Get(':id')
+  @ApiOkResponse({ type: UserEntity })
+  findOne(@Param('id', ParseIntPipe) id: number) {
+    return this.usersService.findOne(id);
+  }
+
+  @Patch(':id')
+  @ApiCreatedResponse({ type: UserEntity })
+  update(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() updateUserDto: UpdateUserDto,
+  ) {
+    return this.usersService.update(id, updateUserDto);
+  }
+
+  @Delete(':id')
+  @ApiOkResponse({ type: UserEntity })
+  remove(@Param('id', ParseIntPipe) id: number) {
+    return this.usersService.remove(id);
+  }
+}
+```
+
+### 从响应体中排除密码字段
+
+当我们查询某个用户的时候，响应体将用户的 password 也返回了，这是不符合实际需求的。
+
+有2种方法可以修复这个问题：
+
+1. 在控制器路由处理程序中手动从响应体中删除密码
+2. 使用拦截器自动从响应体中删除密码
+
+第一种方法很容易出错，所以我们将学习如何使用**拦截器**
+
+#### 使用 ClassSerializerInterceptor 从响应体中删除字段
+
+NestJS有一个内置的ClassSerializerInterceptor，可以用来转换对象。您将使用这个拦截器从响应对象中删除密码字段。
+
+首先更新 main.ts 全局启用ClassSerializerInterceptor
+
+```ts
+// src/main.ts
+
+import { NestFactory, Reflector } from '@nestjs/core';
+import { AppModule } from './app.module';
+import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+import { ClassSerializerInterceptor, ValidationPipe } from '@nestjs/common';
+
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+
+  app.useGlobalPipes(new ValidationPipe({ whitelist: true }));
+  app.useGlobalInterceptors(new ClassSerializerInterceptor(app.get(Reflector)));
+
+  const config = new DocumentBuilder()
+    .setTitle('Median')
+    .setDescription('The Median API description')
+    .setVersion('0.1')
+    .build();
+  const document = SwaggerModule.createDocument(app, config);
+  SwaggerModule.setup('api', app, document);
+
+  await app.listen(3000);
+}
+bootstrap();
+```
+
+ClassSerializerInterceptor 使用类转换器包来定义如何转换对象。使用 @Exclude() 装饰器来排除UserEntity类中的password字段：
+
+```ts
+// src/users/entities/user.entity.ts
+
+import { ApiProperty } from '@nestjs/swagger';
+import { User } from '@prisma/client';
+import { Exclude } from 'class-transformer';
+
+export class UserEntity implements User {
+  @ApiProperty()
+  id: number;
+
+  @ApiProperty()
+  createdAt: Date;
+
+  @ApiProperty()
+  updatedAt: Date;
+
+  @ApiProperty()
+  name: string;
+
+  @ApiProperty()
+  email: string;
+
+  @Exclude()
+  password: string;
+}
+```
+
+再次查询用户详情，你会发现 password 字段依旧被返回了。这是因为，当前控制器中的路由处理程序返回由Prisma Client生成的User类型。ClassSerializerInterceptor只适用于用@Exclude（）装饰器装饰的类。在本例中，它是UserEntity类。所以，你需要更新路由处理程序来返回UserEntity类型。
+
+```ts
+// src/users/entities/user.entity.ts
+
+import { ApiProperty } from '@nestjs/swagger';
+import { User } from '@prisma/client';
+import { Exclude } from 'class-transformer';
+
+export class UserEntity implements User {
+  constructor(partial: Partial<UserEntity>) {
+    Object.assign(this, partial);
+  }
+
+  @ApiProperty()
+  id: number;
+
+  @ApiProperty()
+  createdAt: Date;
+
+  @ApiProperty()
+  updatedAt: Date;
+
+  @ApiProperty()
+  name: string;
+
+  @ApiProperty()
+  email: string;
+
+  @Exclude()
+  password: string;
+}
+```
+
+构造函数接受一个对象，并使用 object.assign() 方法将部分对象的属性复制到UserEntity实例。partial 的类型是 partial<UserEntity>。这意味着部分对象可以包含 UserEntity 类中定义的属性的任何子集。
+
+下一步，更新 UserController 路由处理程序，返回 UserEntity 而不是 Prisma.User。
+
+```ts
+// src/users/users.controller.ts
+
+@Controller('users')
+@ApiTags('users')
+export class UsersController {
+  constructor(private readonly usersService: UsersService) {}
+
+  @Post()
+  @ApiCreatedResponse({ type: UserEntity })
+  async create(@Body() createUserDto: CreateUserDto) {
+    return new UserEntity(await this.usersService.create(createUserDto));
+  }
+
+  @Get()
+  @ApiOkResponse({ type: UserEntity, isArray: true })
+  async findAll() {
+    const users = await this.usersService.findAll();
+    return users.map((user) => new UserEntity(user));
+  }
+
+  @Get(':id')
+  @ApiOkResponse({ type: UserEntity })
+  async findOne(@Param('id', ParseIntPipe) id: number) {
+    return new UserEntity(await this.usersService.findOne(id));
+  }
+
+  @Patch(':id')
+  @ApiCreatedResponse({ type: UserEntity })
+  async update(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() updateUserDto: UpdateUserDto,
+  ) {
+    return new UserEntity(await this.usersService.update(id, updateUserDto));
+  }
+
+  @Delete(':id')
+  @ApiOkResponse({ type: UserEntity })
+  async remove(@Param('id', ParseIntPipe) id: number) {
+    return new UserEntity(await this.usersService.remove(id));
+  }
+}
+```
+
+再次查询用户详情，发现 password 字段已经不再返回了。
+
+### 将作者连同文章一起返回
+
+前面我们已经实现查询文章的接口，只需要简单修改一下就能将关联的作者信息返回了。
+
+```ts
+// src/articles/articles.service.ts
+
+  findOne(id: number) {
+    return this.prisma.article.findUnique({
+      where: { id },
+      include: {
+        author: true,
+      },
+    });
+  }
+```
+
+现在文章关联的作者信息也返回出来了，但是用户信息里携带了 password, 这个问题跟前面的问题类似。首先修改 ArticleEntity，将 author 返回改为 UserEntity。(这个 UserEntity 前面我们已经使用拦截器去除了 password 字段)。然后修改 ArticlesController 将返回从 prisma.article 改成 ArticleEntity。
+
+```ts
+// src/articles/entities/article.entity.ts
+
+import { Article } from '@prisma/client';
+import { ApiProperty } from '@nestjs/swagger';
+import { UserEntity } from 'src/users/entities/user.entity';
+
+export class ArticleEntity implements Article {
+  @ApiProperty()
+  id: number;
+
+  @ApiProperty()
+  title: string;
+
+  @ApiProperty({ required: false, nullable: true })
+  description: string | null;
+
+  @ApiProperty()
+  body: string;
+
+  @ApiProperty()
+  published: boolean;
+
+  @ApiProperty()
+  createdAt: Date;
+
+  @ApiProperty()
+  updatedAt: Date;
+
+  @ApiProperty({ required: false, nullable: true })
+  authorId: number | null;
+
+  @ApiProperty({ required: false, type: UserEntity })
+  author?: UserEntity;
+
+  constructor({ author, ...data }: Partial<ArticleEntity>) {
+    Object.assign(this, data);
+
+    if (author) {
+      this.author = new UserEntity(author);
+    }
+  }
+}
+```
+
+```ts
+// src/articles/articles.controller.ts
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
+  Param,
+  Delete,
+  ParseIntPipe,
+} from '@nestjs/common';
+import { ArticlesService } from './articles.service';
+import { CreateArticleDto } from './dto/create-article.dto';
+import { UpdateArticleDto } from './dto/update-article.dto';
+import { ApiCreatedResponse, ApiOkResponse, ApiTags } from '@nestjs/swagger';
+import { ArticleEntity } from './entities/article.entity';
+
+@Controller('articles')
+@ApiTags('articles')
+export class ArticlesController {
+  constructor(private readonly articlesService: ArticlesService) {}
+
+  @Post()
+  @ApiCreatedResponse({ type: ArticleEntity })
+  async create(@Body() createArticleDto: CreateArticleDto) {
+    return new ArticleEntity(
+      await this.articlesService.create(createArticleDto),
+    );
+  }
+
+  @Get()
+  @ApiOkResponse({ type: ArticleEntity, isArray: true })
+  async findAll() {
+    const articles = await this.articlesService.findAll();
+    return articles.map((article) => new ArticleEntity(article));
+  }
+
+  @Get('drafts')
+  @ApiOkResponse({ type: ArticleEntity, isArray: true })
+  async findDrafts() {
+    const drafts = await this.articlesService.findDrafts();
+    return drafts.map((draft) => new ArticleEntity(draft));
+  }
+
+  @Get(':id')
+  @ApiOkResponse({ type: ArticleEntity })
+  async findOne(@Param('id', ParseIntPipe) id: number) {
+    return new ArticleEntity(await this.articlesService.findOne(id));
+  }
+
+  @Patch(':id')
+  @ApiCreatedResponse({ type: ArticleEntity })
+  async update(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() updateArticleDto: UpdateArticleDto,
+  ) {
+    return new ArticleEntity(
+      await this.articlesService.update(id, updateArticleDto),
+    );
+  }
+
+  @Delete(':id')
+  @ApiOkResponse({ type: ArticleEntity })
+  async remove(@Param('id', ParseIntPipe) id: number) {
+    return new ArticleEntity(await this.articlesService.remove(id));
+  }
+}
+```
+
+参考资料 [Building a REST API with NestJS and Prisma: Handling Relational Data](https://www.prisma.io/blog/nestjs-prisma-relational-data-7D056s1kOabc)
