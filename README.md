@@ -1632,3 +1632,30 @@ export class ArticlesController {
 ```
 
 参考资料 [Building a REST API with NestJS and Prisma: Handling Relational Data](https://www.prisma.io/blog/nestjs-prisma-relational-data-7D056s1kOabc)
+
+## 第三章 用户授权
+
+### 在REST API中实现身份验证
+
+这一节我们将学习给用户相关的 REST 接口添加权限认证。
+
+* GET /users
+* GET /users/:id
+* PATCH /users/:id
+* DELETE /users/:id
+
+权限认证的方案主要有2种，一种是基于 session 的方案，一种是基于 token 的方案。接下来我们将学习如何在 Nestjs 中使用 **Json Web Tokens**。
+
+在开始之前，我们先要生成 auth 模块的资源文件
+
+```shell
+npx nest generate resource
+```
+
+根据终端的提示，选择相应的回答。
+
+1. What name would you like to use for this resource (plural, e.g., "users")? auth
+2. What transport layer do you use? REST API
+3. Would you like to generate CRUD entry points? No
+
+现在，您应该在src/auth目录中找到一个新的 auth 模块。
