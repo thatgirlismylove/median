@@ -1659,3 +1659,41 @@ npx nest generate resource
 3. Would you like to generate CRUD entry points? No
 
 现在，您应该在src/auth目录中找到一个新的 auth 模块。
+
+#### 安装和配置 passport
+
+Passport 是一个流行的 Node.js 认证库，功能强大，支持多种认证策略，并具有很高的可配置性。它通常与 Express 框架一起使用，而 NestJS 本身也是基于 Express 构建的。NestJS 提供了一个官方的 Passport 集成库，称为 @nestjs/passport，使其在 NestJS 应用中更加容易使用和集成。
+
+通过安装下面的这些库开始我们的工作
+```
+npm install --save @nestjs/passport passport @nestjs/jwt passport-jwt
+npm install --save-dev @types/passport-jwt
+```
+
+你已经安装了所需要的包，现在可以在应用里配置 passport 了，打开 src/auth.module.ts 文件并添加以下代码
+
+```
+//src/auth/auth.module.ts
+import { Module } from '@nestjs/common';
+import { AuthService } from './auth.service';
+import { AuthController } from './auth.controller';
+import { PassportModule } from '@nestjs/passport';
+import { JwtModule } from '@nestjs/jwt';
+import { PrismaModule } from 'src/prisma/prisma.module';
+
+export const jwtSecret = 'zjP9h6ZI5LoSKCRj';
+
+@Module({
+  imports: [
+    PrismaModule,
+    PassportModule,
+    JwtModule.register({
+      secret: jwtSecret,
+      signOptions: { expiresIn: '5m' }, // e.g. 30s, 7d, 24h
+    }),
+  ],
+  controllers: [AuthController],
+  providers: [AuthService],
+})
+export class AuthModule {}
+```
