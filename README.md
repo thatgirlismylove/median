@@ -1697,3 +1697,15 @@ export const jwtSecret = 'zjP9h6ZI5LoSKCRj';
 })
 export class AuthModule {}
 ```
+
+@nestjs/passport 模块提供了一个可以导入到应用程序中的 PassportModule。PassportModule 是 passport 库的包装器，该库提供了特定于 NestJS 的实用程序。您可以在官方文档中阅读更多关于 PassportModule 的信息。
+
+您还配置了一个 JwtModule，您将使用它来生成和验证jwt。JwtModule 是 jsonwebtoken 库的包装器。secret 提供了一个用于对 jwt 签名的密钥。expiresIn 对象定义jwt的过期时间。当前设置为1分钟。
+
+注意：在实际的应用程序中，永远不应该将密钥直接存储在代码库中。NestJS提供了@nestjs/config包，用于从环境变量中加载秘密。您可以在官方文档中阅读更多相关内容。
+
+#### 实现 POST /auth/login 接口
+
+POST /login 将用于验证用户。它将接受用户名和密码，如果认证通过，则返回JWT。首先创建一个LoginDto类，它将定义请求体 Body 的结构。
+
+
