@@ -1633,7 +1633,9 @@ export class ArticlesController {
 
 参考资料 [Building a REST API with NestJS and Prisma: Handling Relational Data](https://www.prisma.io/blog/nestjs-prisma-relational-data-7D056s1kOabc)
 
-## 第三章 用户授权
+## 第四章 用户授权
+
+本篇文章是 NestJs 实现 REST API 系列最后一篇文章，如果你还没有阅读过前面的文章，请先查看前面的文章。
 
 ### 在REST API中实现身份验证
 
@@ -1708,4 +1710,605 @@ export class AuthModule {}
 
 POST /login 将用于验证用户。它将接受用户名和密码，如果认证通过，则返回JWT。首先创建一个LoginDto类，它将定义请求体 Body 的结构。
 
+用 email 和 password 字段来定义 LoginDto 类。
 
+```ts
+//src/auth/dto/login.dto.ts
+import { ApiProperty } from '@nestjs/swagger';
+import { IsEmail, IsNotEmpty, IsString, MinLength } from 'class-validator';
+
+export class LoginDto {
+  @IsEmail()
+  @IsNotEmpty()
+  @ApiProperty()
+  email: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MinLength(6)
+  @ApiProperty()
+  password: string;
+}
+```
+
+您还需要定义一个新的 AuthEntity 来描述JWT有效负载的形状。在src/auth/entity目录下创建一个新文件auth.entity.ts：
+
+```
+mkdir src/auth/entity
+touch src/auth/entity/auth.entity.ts
+```
+
+按照下面的内容定义 AuthEntity 类。
+
+```ts
+//src/auth/entity/auth.entity.ts
+import { ApiProperty } from '@nestjs/swagger';
+
+export class AuthEntity {
+  @ApiProperty()
+  accessToken: string;
+}
+```
+
+AuthEntity只有一个名为accessToken的字符串字段，它将包含JWT。
+
+在 AuthService 新增一个 login 方法。
+
+```ts
+//src/auth/auth.service.ts
+import {
+  Injectable,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { PrismaService } from './../prisma/prisma.service';
+import { JwtService } from '@nestjs/jwt';
+import { AuthEntity } from './entity/auth.entity';
+
+@Injectable()
+export class AuthService {
+  constructor(private prisma: PrismaService, private jwtService: JwtService) {}
+
+  async login(email: string, password: string): Promise<AuthEntity> {
+    // Step 1: Fetch a user with the given email
+    const user = await this.prisma.user.findUnique({ where: { email: email } });
+
+    // If no user is found, throw an error
+    if (!user) {
+      throw new NotFoundException(`No user found for email: ${email}`);
+    }
+
+    // Step 2: Check if the password is correct
+    const isPasswordValid = user.password === password;
+
+    // If password does not match, throw an error
+    if (!isPasswordValid) {
+      throw new UnauthorizedException('Invalid password');
+    }
+
+    // Step 3: Generate a JWT containing the user's ID and return it
+    return {
+      accessToken: this.jwtService.sign({ userId: user.id }),
+    };
+  }
+}
+```
+
+login方法首先获取具有给定电子邮件的用户。如果没有找到用户，则抛出NotFoundException异常。如果找到用户，则检查密码是否正确。如果密码不正确，则会抛出UnauthorizedException异常。如果密码正确，则生成包含用户ID的JWT并返回。
+
+现在我们在 AuthController 创建 POST /auth/login 方法。
+
+```ts
+//src/auth/auth.controller.ts
+
+import { Body, Controller, Post } from '@nestjs/common';
+import { AuthService } from './auth.service';
+import { ApiOkResponse, ApiTags } from '@nestjs/swagger';
+import { AuthEntity } from './entity/auth.entity';
+import { LoginDto } from './dto/login.dto';
+
+@Controller('auth')
+@ApiTags('auth')
+export class AuthController {
+  constructor(private readonly authService: AuthService) {}
+
+  @Post('login')
+  @ApiOkResponse({ type: AuthEntity })
+  login(@Body() { email, password }: LoginDto) {
+    return this.authService.login(email, password);
+  }
+}
+```
+
+启动项目(包括docker服务)，访问本地 http://localhost:3000/api 调用 POST /auth/login， 传入一个正确的邮箱和密码。
+
+```json
+{
+  "email": "alex@ruheni.com",
+  "password": "password-alex"
+}
+```
+
+你可以看到接口成功的返回了 accessToken。
+
+#### 实现JWT身份验证策略
+
+在 Passport 中，策略负责对请求进行身份验证，这是通过实现身份验证机制来完成的。在本节中，您将实现用于对用户进行身份验证的JWT身份验证策略。
+
+您将不会直接使用 passport 包，而是与包装器包@nestjs/passport交互，它将在底层调用 passport 包。要用@nestjs/passport配置策略，需要创建一个类来扩展PassportStrategy类。在这门课上，你需要做两件主要的事情：
+
+1. 您将把JWT策略特定的选项和配置传递给构造函数中的super（）方法。
+2. validate（）回调方法，它将与数据库交互，根据JWT有效负载获取用户。如果找到用户，validate（）方法将返回用户对象。
+
+首先在 src/auth/strategy 目录下新建一个 jwt.strategy.ts 文件。
+
+```
+touch src/auth/jwt.strategy.ts
+```
+
+现在实现一下 JwtStrategy 类。
+
+```ts
+//src/auth/jwt.strategy.ts
+import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { PassportStrategy } from '@nestjs/passport';
+import { ExtractJwt, Strategy } from 'passport-jwt';
+import { jwtSecret } from './auth.module';
+import { UsersService } from 'src/users/users.service';
+
+@Injectable()
+export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
+  constructor(private usersService: UsersService) {
+    super({
+      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      secretOrKey: jwtSecret,
+    });
+  }
+
+  async validate(payload: { userId: number }) {
+    const user = await this.usersService.findOne(payload.userId);
+
+    if (!user) {
+      throw new UnauthorizedException();
+    }
+
+    return user;
+  }
+}
+```
+
+您已经创建了一个JwtStrategy类，它扩展了PassportStrategy类。PassportStrategy类接受两个参数：策略实现和策略名称。这里使用的是passport-jwt库中的预定义策略。
+
+您正在向构造函数中的super（）方法传递一些选项。jwtFromRequest选项需要一个可用于从请求中提取JWT的方法。在这种情况下，您将使用在API请求的Authorization头中提供承载令牌的标准方法 (BearerToken)。secretOrKey选项告诉策略使用什么密钥来验证JWT。还有更多的选项，您可以在 [passport-jwt github](https://github.com/mikenicholson/passport-jwt#configure-strategy) 查看。
+
+对于 passport-jwt， Passport首先验证JWT的签名并解码JSON。然后将解码后的JSON传递给validate（）方法。基于JWT签名的工作方式，你可以保证收到一个有效的令牌，这个令牌是之前由你的应用程序签名和发出的。validate（）方法预计会返回一个用户对象。如果没有找到用户，validate（）方法会抛出一个错误。
+
+ps: passport 还可以生成基于 session 的权限认证方案，具体可以查看 NestJs 官网 Passport 部分。
+
+在 authModule 中将新增的 JwtStrategy 放入 providers 中。
+
+```ts
+//src/auth/auth.module.ts
+import { Module } from '@nestjs/common';
+import { AuthService } from './auth.service';
+import { AuthController } from './auth.controller';
+import { PassportModule } from '@nestjs/passport';
+import { JwtModule } from '@nestjs/jwt';
+import { PrismaModule } from 'src/prisma/prisma.module';
+import { UsersModule } from 'src/users/users.module';
+import { JwtStrategy } from './jwt.strategy';
+
+export const jwtSecret = 'zjP9h6ZI5LoSKCRj';
+
+@Module({
+  imports: [
+    PrismaModule,
+    PassportModule,
+    JwtModule.register({
+      secret: jwtSecret,
+      signOptions: { expiresIn: '5m' }, // e.g. 7d, 24h
+    }),
+    UsersModule,
+  ],
+  controllers: [AuthController],
+  providers: [AuthService, JwtStrategy],
+})
+export class AuthModule {}
+```
+
+现在，JwtStrategy 可以被其他模块使用。您还在导入中添加了UsersModule，因为在JwtStrategy类中使用了UsersService
+
+为了在JwtStrategy类中访问UsersService，你还需要在UsersModule的导出中添加它。
+
+```ts
+// src/users/users.module.ts
+import { Module } from '@nestjs/common';
+import { UsersService } from './users.service';
+import { UsersController } from './users.controller';
+import { PrismaModule } from 'src/prisma/prisma.module';
+
+@Module({
+  controllers: [UsersController],
+  providers: [UsersService],
+  imports: [PrismaModule],
+  exports: [UsersService],
+})
+export class UsersModule {}
+```
+
+#### 实现JWT授权守卫
+
+Guards （守卫）是 NestJS 的一个结构，它可以觉得请求是否可以继续下去。在这一部分，你将会实现一个自定义的 JwtAuthGuard，它将保护那些需要认证的路由。
+
+在 src/auth 目录下新建一个 jwt-auth.guard.ts 文件。
+
+```
+touch src/auth/jwt-auth.guard.ts
+```
+
+现在我们来实现一下， JwtAuthGuard 类。
+
+```ts
+//src/auth/jwt-auth.guard.ts
+import { Injectable } from '@nestjs/common';
+import { AuthGuard } from '@nestjs/passport';
+
+@Injectable()
+export class JwtAuthGuard extends AuthGuard('jwt') {}
+```
+
+AuthGuard类需要策略的名称。在本例中，您使用的是在前一节中实现的JwtStrategy，它被命名为jwt。
+
+现在我们可以使用这个 guard 作为一个装饰器来保护我们的路由接口了。给 UsersController 的路由添加 JwtAuthGuard 。
+
+```ts
+// src/users/users.controller.ts
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
+  Param,
+  Delete,
+  ParseIntPipe,
+  UseGuards,
+} from '@nestjs/common';
+import { UsersService } from './users.service';
+import { CreateUserDto } from './dto/create-user.dto';
+import { UpdateUserDto } from './dto/update-user.dto';
+import { ApiCreatedResponse, ApiOkResponse, ApiTags } from '@nestjs/swagger';
+import { UserEntity } from './entities/user.entity';
+import { JwtAuthGuard } from 'src/auth/jwt-auth.guard';
+
+@Controller('users')
+@ApiTags('users')
+export class UsersController {
+  constructor(private readonly usersService: UsersService) {}
+
+  @Post()
+  @ApiCreatedResponse({ type: UserEntity })
+  async create(@Body() createUserDto: CreateUserDto) {
+    return new UserEntity(await this.usersService.create(createUserDto));
+  }
+
+  @Get()
+  @UseGuards(JwtAuthGuard)
+  @ApiOkResponse({ type: UserEntity, isArray: true })
+  async findAll() {
+    const users = await this.usersService.findAll();
+    return users.map((user) => new UserEntity(user));
+  }
+
+  @Get(':id')
+  @UseGuards(JwtAuthGuard)
+  @ApiOkResponse({ type: UserEntity })
+  async findOne(@Param('id', ParseIntPipe) id: number) {
+    return new UserEntity(await this.usersService.findOne(id));
+  }
+
+  @Patch(':id')
+  @UseGuards(JwtAuthGuard)
+  @ApiCreatedResponse({ type: UserEntity })
+  async update(
+          @Param('id', ParseIntPipe) id: number,
+          @Body() updateUserDto: UpdateUserDto,
+  ) {
+    return new UserEntity(await this.usersService.update(id, updateUserDto));
+  }
+
+  @Delete(':id')
+  @UseGuards(JwtAuthGuard)
+  @ApiOkResponse({ type: UserEntity })
+  async remove(@Param('id', ParseIntPipe) id: number) {
+    return new UserEntity(await this.usersService.remove(id));
+  }
+}
+```
+
+现在你调用这些接口中的任意一个，如果没有授权，都会返回 401，结果如下：
+```
+{
+  "message": "Unauthorized",
+  "statusCode": 401
+}
+```
+
+###  在Swagger中集成身份验证
+
+目前在 Swagger 上还没有迹象表明这些接口需要权限。你可以在控制器中添加一个 @ApiBearerAuth() 装饰器来指示需要进行身份验证。
+
+```ts
+// src/users/users.controller.ts
+
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
+  Param,
+  Delete,
+  ParseIntPipe,
+  UseGuards,
+} from '@nestjs/common';
+import { UsersService } from './users.service';
+import { CreateUserDto } from './dto/create-user.dto';
+import { UpdateUserDto } from './dto/update-user.dto';
+import { ApiBearerAuth, ApiCreatedResponse, ApiOkResponse, ApiTags } from '@nestjs/swagger';
+import { UserEntity } from './entities/user.entity';
+import { JwtAuthGuard } from 'src/auth/jwt-auth.guard';
+
+@Controller('users')
+@ApiTags('users')
+export class UsersController {
+  constructor(private readonly usersService: UsersService) {}
+
+  @Post()
+  @ApiCreatedResponse({ type: UserEntity })
+  async create(@Body() createUserDto: CreateUserDto) {
+    return new UserEntity(await this.usersService.create(createUserDto));
+  }
+
+  @Get()
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOkResponse({ type: UserEntity, isArray: true })
+  async findAll() {
+    const users = await this.usersService.findAll();
+    return users.map((user) => new UserEntity(user));
+  }
+
+  @Get(':id')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOkResponse({ type: UserEntity })
+  async findOne(@Param('id', ParseIntPipe) id: number) {
+    return new UserEntity(await this.usersService.findOne(id));
+  }
+
+  @Patch(':id')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiCreatedResponse({ type: UserEntity })
+  async update(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() updateUserDto: UpdateUserDto,
+  ) {
+    return new UserEntity(await this.usersService.update(id, updateUserDto));
+  }
+
+  @Delete(':id')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOkResponse({ type: UserEntity })
+  async remove(@Param('id', ParseIntPipe) id: number) {
+    return new UserEntity(await this.usersService.remove(id));
+  }
+}
+```
+
+现在刷新 Swagger 接口文档，你会发现在代码中加上装饰器的接口后面出现了一个 “锁” 的标记。这表明那个接口需要用户权限。
+
+目前还不可能在Swagger中直接对自己进行“身份验证”，这样您就可以测试这些端点。要做到这一点，你可以在main.ts中的SwaggerModule设置中添加.addBearerAuth（）方法调用
+
+```ts
+// src/main.ts
+
+import { NestFactory, Reflector } from '@nestjs/core';
+import { AppModule } from './app.module';
+import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+import { ClassSerializerInterceptor, ValidationPipe } from '@nestjs/common';
+
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+
+  app.useGlobalPipes(new ValidationPipe({ whitelist: true }));
+  app.useGlobalInterceptors(new ClassSerializerInterceptor(app.get(Reflector)));
+
+  const config = new DocumentBuilder()
+    .setTitle('Median')
+    .setDescription('The Median API description')
+    .setVersion('0.1')
+    .addBearerAuth()
+    .build();
+  const document = SwaggerModule.createDocument(app, config);
+  SwaggerModule.setup('api', app, document);
+
+  await app.listen(3000);
+}
+bootstrap();
+```
+
+现在，您可以通过单击Swagger中的Authorize按钮来添加令牌。Swagger会将令牌添加到您的请求中，以便您可以查询受保护的接口。
+
+首先通过调用 /auth/login 进行授权登录，然后拿到接口返回的 accessToken 添加到 Swagger 接口文档弹出的令牌认证窗口中。
+
+#### 哈希密码
+
+目前，密码以明文的形式存储到数据库中。这是有安全风险的，如果数据库被泄漏，那么所有密码都会被泄漏。要解决这个问题，我们需要先对密码进行哈希处理，然后再存储到数据库中。
+
+我们需要安装 bcrypt 这个库
+ 
+```
+npm install bcrypt
+npm install --save-dev @types/bcrypt
+```
+
+crate 和 update 这2个接口涉及到存储密码到数据库，所以我们需要修改这个它们对应的逻辑，在 UsersService 中找到这对应的方法，在调用 prisma 操作数据库之前，我们先将密码哈希。
+
+```ts
+// src/users/users.service.ts
+import { Injectable } from '@nestjs/common';
+import { CreateUserDto } from './dto/create-user.dto';
+import { UpdateUserDto } from './dto/update-user.dto';
+import { PrismaService } from 'src/prisma/prisma.service';
+import * as bcrypt from 'bcrypt';
+
+export const roundsOfHashing = 10;
+
+@Injectable()
+export class UsersService {
+  constructor(private prisma: PrismaService) {}
+
+  async create(createUserDto: CreateUserDto) {
+    const hashedPassword = await bcrypt.hash(
+      createUserDto.password,
+      roundsOfHashing,
+    );
+
+    createUserDto.password = hashedPassword;
+
+    return this.prisma.user.create({
+      data: createUserDto,
+    });
+  }
+
+  findAll() {
+    return this.prisma.user.findMany();
+  }
+
+  findOne(id: number) {
+    return this.prisma.user.findUnique({ where: { id } });
+  }
+
+  async update(id: number, updateUserDto: UpdateUserDto) {
+    if (updateUserDto.password) {
+      updateUserDto.password = await bcrypt.hash(
+        updateUserDto.password,
+        roundsOfHashing,
+      );
+    }
+
+    return this.prisma.user.update({
+      where: { id },
+      data: updateUserDto,
+    });
+  }
+
+  remove(id: number) {
+    return this.prisma.user.delete({ where: { id } });
+  }
+}
+```
+
+bcrypt.hash 哈希函数接受两个参数：哈希函数的输入字符串和哈希的轮数（也称为成本因子）。增加哈希的轮数会增加计算哈希所需的时间。这里需要在安全性和性能之间进行权衡。随着哈希次数的增加，计算哈希值需要更多的时间，这有助于防止暴力攻击。然而，当用户登录时，更多的哈希轮也意味着更多的时间来计算哈希
+
+bcrypt 还自动使用另一种称为salt的技术来增加暴力破解哈希的难度。Salting是一种在散列之前将随机字符串添加到输入字符串中的技术。这样，攻击者就不能使用预先计算的哈希表来破解密码，因为每个密码都有不同的盐值。
+
+您还需要更新数据库种子脚本，以便在将密码插入数据库之前对密码进行散列处理：
+
+```ts
+// prisma/seed.ts
+import { PrismaClient } from '@prisma/client';
+import * as bcrypt from 'bcrypt';
+
+// initialize the Prisma Client
+const prisma = new PrismaClient();
+
+const roundsOfHashing = 10;
+
+async function main() {
+  // create two dummy users
+  const passwordSabin = await bcrypt.hash('password-sabin', roundsOfHashing);
+  const passwordAlex = await bcrypt.hash('password-alex', roundsOfHashing);
+
+  const user1 = await prisma.user.upsert({
+    where: { email: 'sabin@adams.com' },
+    update: {
+      password: passwordSabin,
+    },
+    create: {
+      email: 'sabin@adams.com',
+      name: 'Sabin Adams',
+      password: passwordSabin,
+    },
+  });
+
+  const user2 = await prisma.user.upsert({
+    where: { email: 'alex@ruheni.com' },
+    update: {
+      password: passwordAlex,
+    },
+    create: {
+      email: 'alex@ruheni.com',
+      name: 'Alex Ruheni',
+      password: passwordAlex,
+    },
+  });
+
+  // create three dummy posts
+  // ...
+}
+
+// execute the main function
+// ...
+```
+
+运行 npx prisma db seed， 查看终端或者数据库发现用户密码已经被哈希处理了。
+
+现在，如果您尝试使用正确的密码登录，您将面临HTTP 401错误。这是因为登录方法试图将来自用户请求的明文密码与数据库中的散列密码进行比较。更新登录方法以使用散列密码：
+
+```ts
+//src/auth/auth.service.ts
+import { AuthEntity } from './entity/auth.entity';
+import { PrismaService } from './../prisma/prisma.service';
+import {
+  Injectable,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
+import * as bcrypt from 'bcrypt';
+
+@Injectable()
+export class AuthService {
+  constructor(private prisma: PrismaService, private jwtService: JwtService) {}
+
+  async login(email: string, password: string): Promise<AuthEntity> {
+    const user = await this.prisma.user.findUnique({ where: { email } });
+
+    if (!user) {
+      throw new NotFoundException(`No user found for email: ${email}`);
+    }
+
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+
+    if (!isPasswordValid) {
+      throw new UnauthorizedException('Invalid password');
+    }
+
+    return {
+      accessToken: this.jwtService.sign({ userId: user.id }),
+    };
+  }
+}
+```
+
+现在我们可以使用正确的密码来调用 /auth/login 接口来拿到 jwt token了。
+
+#### 总结
+
+在本章中，您学习了如何在您的NestJS REST API中实现JWT身份验证。您还了解了如何设置密码和将身份验证与Swagger集成。
+
+完整代码以及说明文档请查看 [Nestjs 和 Prisma 实现 Restful Api]()
