@@ -2311,4 +2311,4 @@ export class AuthService {
 
 在本章中，您学习了如何在您的NestJS REST API中实现JWT身份验证。您还了解了如何设置密码和将身份验证与Swagger集成。
 
-完整代码以及说明文档请查看 [Nestjs 和 Prisma 实现 Restful Api]()
+完整代码以及说明文档请查看 [Nestjs 和 Prisma 实现 Restful Api](https://github.com/thatgirlismylove/median)
